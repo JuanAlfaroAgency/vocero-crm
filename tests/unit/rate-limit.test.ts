@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AUTH_RATE_LIMIT,
   checkRateLimit,
   clientIp,
+  ipHeaders,
   rateLimitKeys,
   resetRateLimit,
 } from "@/lib/rate-limit";
@@ -59,6 +60,52 @@ describe("clientIp: a quién frenar (jamás a quién autorizar)", () => {
     expect(clientIp(h({ "x-real-ip": "198.51.100.7" }))).toBe("198.51.100.7");
     expect(clientIp(h({}))).toBe("local");
     expect(clientIp(undefined)).toBe("local");
+  });
+
+  describe("cf-connecting-ip", () => {
+    afterEach(() => vi.unstubAllEnvs());
+
+    // Detrás de la nube naranja, Traefik pone en x-forwarded-for la IP del
+    // borde de Cloudflare; la del cliente viaja aparte.
+    const detrasDeCloudflare = () =>
+      h({
+        "cf-connecting-ip": "203.0.113.50",
+        "x-forwarded-for": "172.70.1.1",
+      });
+
+    it("sin ORIGEN_PROXY se ignora: cualquiera podría mandarlo a mano", () => {
+      vi.stubEnv("ORIGEN_PROXY", "");
+      expect(clientIp(detrasDeCloudflare())).toBe("172.70.1.1");
+      expect(ipHeaders()).not.toContain("cf-connecting-ip");
+    });
+
+    it("con ORIGEN_PROXY=cloudflare es la IP del cliente", () => {
+      vi.stubEnv("ORIGEN_PROXY", "cloudflare");
+      expect(clientIp(detrasDeCloudflare())).toBe("203.0.113.50");
+      expect(ipHeaders()[0]).toBe("cf-connecting-ip");
+    });
+
+    it("con la bandera pero sin el encabezado, vuelve a x-forwarded-for", () => {
+      vi.stubEnv("ORIGEN_PROXY", "cloudflare");
+      expect(clientIp(h({ "x-forwarded-for": "198.51.100.3" }))).toBe("198.51.100.3");
+    });
+
+    it("dos clientes tras el mismo borde no comparten límite", () => {
+      vi.stubEnv("ORIGEN_PROXY", "cloudflare");
+      resetRateLimit();
+      const borde = "172.70.1.1";
+      const desde = (ip: string) =>
+        clientIp(h({ "cf-connecting-ip": ip, "x-forwarded-for": borde }));
+      for (let i = 0; i < AUTH_RATE_LIMIT.max; i++) {
+        checkRateLimit(`login:${desde("203.0.113.1")}`, AUTH_RATE_LIMIT, 1_000 + i);
+      }
+      expect(
+        checkRateLimit(`login:${desde("203.0.113.1")}`, AUTH_RATE_LIMIT, 2_000).allowed
+      ).toBe(false);
+      expect(
+        checkRateLimit(`login:${desde("203.0.113.2")}`, AUTH_RATE_LIMIT, 2_000).allowed
+      ).toBe(true);
+    });
   });
 });
 
