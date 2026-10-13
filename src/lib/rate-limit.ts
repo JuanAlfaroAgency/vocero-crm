@@ -62,17 +62,32 @@ export function checkRateLimit(
 }
 
 /**
- * La IP del cliente para LIMITAR, jamás para autorizar: el primer salto de
- * `x-forwarded-for` (detrás de Traefik/Coolify o Caddy es el cliente real),
- * luego `x-real-ip`, y "local" sin proxy. Sin proxy delante, el cliente
- * puede falsearla: por eso solo decide a quién frenar.
+ * De qué encabezados sale la IP del cliente, en orden. Con
+ * `ORIGEN_PROXY=cloudflare`, primero `cf-connecting-ip`: detrás de la nube
+ * naranja quien le habla a Traefik es el borde de Cloudflare, y el
+ * `x-forwarded-for` que llega trae la IP del borde, compartida por muchos
+ * clientes. Sin la bandera no se lee: sin Cloudflare delante, cualquiera
+ * puede mandarlo a mano. La comparten este limitador y el de Better Auth.
+ */
+export function ipHeaders(): string[] {
+  return process.env.ORIGEN_PROXY === "cloudflare"
+    ? ["cf-connecting-ip", "x-forwarded-for", "x-real-ip"]
+    : ["x-forwarded-for", "x-real-ip"];
+}
+
+/**
+ * La IP del cliente para LIMITAR, jamás para autorizar: el primer encabezado
+ * de `ipHeaders()` que traiga valor (de `x-forwarded-for`, su primer salto:
+ * detrás de Traefik/Coolify o Caddy es el cliente real), y "local" sin
+ * proxy. Sin proxy delante, el cliente puede falsearla: por eso solo decide
+ * a quién frenar.
  */
 export function clientIp(headers: Headers | null | undefined): string {
-  return (
-    headers?.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    headers?.get("x-real-ip") ||
-    "local"
-  );
+  for (const name of ipHeaders()) {
+    const ip = headers?.get(name)?.split(",")[0]?.trim();
+    if (ip) return ip;
+  }
+  return "local";
 }
 
 /** Solo para tests. */

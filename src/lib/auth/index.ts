@@ -5,7 +5,12 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { organization } from "better-auth/plugins";
 import { getDb, schema } from "@/lib/db";
 import { getEnv } from "@/lib/env";
-import { AUTH_RATE_LIMIT, checkRateLimit, clientIp } from "@/lib/rate-limit";
+import {
+  AUTH_RATE_LIMIT,
+  checkRateLimit,
+  clientIp,
+  ipHeaders,
+} from "@/lib/rate-limit";
 import {
   onUserCreated,
   resolveActiveOrganizationId,
@@ -63,6 +68,11 @@ function createAuth() {
       minPasswordLength: 8,
     },
     plugins: [organization({ creatorRole: "owner" })],
+    // El limitador propio de Better Auth (3 intentos / 10 s en login y
+    // registro) lee la IP de los mismos encabezados que el nuestro: detrás
+    // de Cloudflare, sin esto, todos los que entran por un mismo borde
+    // compartirían cubo.
+    advanced: { ipAddress: { ipAddressHeaders: ipHeaders() } },
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
         // Rate limit por IP en login/registro (FR-062): 10 / 10 min → 429.
